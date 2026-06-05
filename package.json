@@ -49,6 +49,9 @@
     "zod": "^3.25.63",
     "zod-to-json-schema": "^3.24.5"
   },
+  "optionalDependencies": {
+    "kerberos": "^2.2.2"
+  },
   "devDependencies": {
     "@types/jest": "^30.0.0",
     "@types/node": "^22.19.1",

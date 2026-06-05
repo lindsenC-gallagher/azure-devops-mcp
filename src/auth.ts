@@ -122,6 +122,15 @@ function createAuthenticator(type: string, tenantId?: string): () => Promise<str
         return normalizedPat;
       };
 
+    case "wia":
+      // Windows Integrated Auth: there is no bearer token to hand out. Real auth
+      // happens per-request via the Negotiate request handler (WebApi connection)
+      // and the global fetch interceptor (direct-REST tools), both in index.ts.
+      // This placeholder only needs to produce a `Bearer ` header for the fetch
+      // interceptor to recognise and rewrite to `Negotiate <token>`. See wia-auth.ts.
+      logger.debug(`Authenticator: Using Windows Integrated Auth (Negotiate/Kerberos); returning placeholder token`);
+      return async () => "wia-negotiate";
+
     case "envvar":
       logger.debug(`Authenticator: Using environment variable authentication (ADO_MCP_AUTH_TOKEN)`);
       // Read token from fixed environment variable
