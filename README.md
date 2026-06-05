@@ -86,6 +86,30 @@ The `-d` flags load only the listed domains. Omitting them loads everything — 
 
 To verify, run `claude mcp list` — `azure-devops-onprem` should show as connected. Then try a prompt like `list ADO projects on the on-prem server`.
 
+### On-prem Azure DevOps Server with Windows Integrated Auth — no PAT (fork-specific, experimental)
+
+On a **domain-joined Windows host on the corporate network/VPN**, you can skip the PAT entirely and authenticate as your logged-in account over SPNEGO/Kerberos. See [docs/FORK-ONPREM-WIA.md](./docs/FORK-ONPREM-WIA.md) for the full design, limitations, and validation.
+
+1. Build the fork and install the optional native Kerberos module:
+   ```bash
+   npm install
+   npm install kerberos
+   npm run build
+   ```
+2. Register the server with `--authentication wia` and **no** `ADO_PAT`:
+   ```bash
+   claude mcp add azure-devops-onprem \
+     -- node /absolute/path/to/azure-devops-mcp/dist/index.js \
+        https://ado.company.local/tfs/DefaultCollection \
+        --authentication wia \
+        -d core work work-items repositories
+   ```
+
+Notes:
+
+- Off the corporate network/VPN the on-prem host won't resolve, and WIA won't connect.
+- This is a spike: the typed `WebApi` tools (core, work, work-items, repositories, wiki, pipelines, test-plans) work; the few direct-`fetch` tools (`core_get_identity_ids`, search) will 401 under WIA. Details in [docs/FORK-ONPREM-WIA.md](./docs/FORK-ONPREM-WIA.md).
+
 ## Using With Claude Desktop
 
 Open **File → Settings → Developer → Edit Config** and edit `claude_desktop_config.json`.
@@ -142,6 +166,8 @@ Notes:
 
 Then start a new chat, open **Search and Tools**, and the `azure-devops-onprem` toolset should appear. Try `list my ADO projects`.
 
+To use Windows Integrated Auth (no PAT) instead, set `"--authentication"`, `"wia"` in `args`, drop the `env`/`ADO_PAT` block, and `npm install kerberos` once. See [docs/FORK-ONPREM-WIA.md](./docs/FORK-ONPREM-WIA.md).
+
 ## Refreshing After A Fork Update
 
 When this fork ships a new tool or fix, your clients keep running the old compiled `dist/` until you rebuild. The MCP server itself is launched by `node dist/index.js`, not by `npm`, so a `git pull` alone is not enough.
@@ -184,7 +210,7 @@ git merge upstream/main
 If the merge is clean, you're done. If there are conflicts:
 
 1. `git status` shows the conflicted files.
-2. For fork-specific files (anything in [What This Fork Adds](#what-this-fork-adds) — `src/auth.ts`, `src/deployment.ts`, `src/tools/auth.ts`, `src/tools/search.ts`, `src/index.ts`, fork docs), resolve in favour of the fork's behaviour, then layer upstream's changes on top if compatible.
+2. For fork-specific files (anything in [What This Fork Adds](#what-this-fork-adds) — `src/auth.ts`, `src/deployment.ts`, `src/tools/auth.ts`, `src/tools/search.ts`, `src/index.ts`, `src/wia-auth.ts`, fork docs), resolve in favour of the fork's behaviour, then layer upstream's changes on top if compatible.
 3. For everything else, take upstream unless there's a clear reason not to.
 4. After resolving: `git add <files>` then `git commit` to complete the merge.
 
@@ -208,6 +234,7 @@ git push origin main
 
 - [Upstream README on GitHub](https://github.com/microsoft/azure-devops-mcp/blob/main/README.md) — Microsoft's project README (always reflects upstream `main`).
 - [docs/FORK-ONPREM-PAT.md](./docs/FORK-ONPREM-PAT.md) — full rationale for each fork change, plus OpenCode setup and troubleshooting.
+- [docs/FORK-ONPREM-WIA.md](./docs/FORK-ONPREM-WIA.md) — the experimental no-PAT Windows Integrated Auth (`--authentication wia`) mode: design, multi-leg SPNEGO handshake, limitations, and live validation.
 - [docs/GETTINGSTARTED.md](./docs/GETTINGSTARTED.md) — upstream's setup guide covering VS Code, Visual Studio 2022, Cursor, Codex, Kilocode (also includes a section for this fork's on-prem PAT mode under OpenCode).
 - [docs/TOOLSET.md](./docs/TOOLSET.md) — full list of MCP tools exposed by the server.
 - [docs/TROUBLESHOOTING.md](./docs/TROUBLESHOOTING.md) — common issues and logging.
