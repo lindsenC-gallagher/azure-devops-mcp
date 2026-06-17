@@ -10,7 +10,7 @@ import yargs from "yargs";
 import { hideBin } from "yargs/helpers";
 
 import { createAuthenticator } from "./auth.js";
-import { WiaAuthenticator, createNegotiateRequestHandler } from "./wia-auth.js";
+import { WiaAuthenticator, createNegotiateRequestHandler, createNegotiateFetch } from "./wia-auth.js";
 import { resolveDeploymentContext } from "./deployment.js";
 import { logger } from "./logger.js";
 import { getOrgTenant } from "./org-tenants.js";
@@ -126,29 +126,14 @@ async function main() {
   const wiaAuthenticator = argv.authentication === "wia" ? new WiaAuthenticator(orgUrl) : undefined;
 
   if (argv.authentication === "wia" && wiaAuthenticator) {
-    // Direct-REST tools (tools/auth.ts, search, etc.) set `Authorization: Bearer <placeholder>`
-    // via the token provider. Rewrite that to a freshly minted `Negotiate` header, mirroring
-    // the PAT interceptor below. The WebApi connection is handled separately by its own handler.
-    // NOTE (spike limitation): this is single-leg only — undici gives no socket affinity to
-    // complete the multi-leg SPNEGO handshake the on-prem server requires, so these few
-    // direct-fetch tools will 401 under WIA. The typed WebApi tools (the bulk) work fully.
-    // See docs/FORK-ONPREM-WIA.md.
-    const _originalFetch = globalThis.fetch;
-    globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
-      const requestHeaders = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
-      if (requestHeaders.get("Authorization")?.startsWith("Bearer ")) {
-        const token = await wiaAuthenticator.getNegotiateToken();
-        requestHeaders.set("Authorization", `Negotiate ${token}`);
-        if (input instanceof Request) {
-          input = new Request(input, { headers: requestHeaders });
-          init = undefined;
-        } else {
-          init = { ...init, headers: requestHeaders };
-        }
-      }
-      return _originalFetch(input, init);
-    };
-    logger.debug("WIA mode: global fetch interceptor installed to rewrite Bearer -> Negotiate auth headers");
+    // Direct-REST tools (tools/auth.ts, the wit_*_$batch helpers, etc.) set
+    // `Authorization: Bearer <placeholder>` via the token provider. Replace the platform
+    // fetch with a node:http(s) transport that completes the full multi-leg SPNEGO
+    // handshake on a pinned keep-alive socket — the platform fetch (undici) can't, so the
+    // old header-rewrite interceptor was single-leg only and 401'd under WIA. Non-Bearer
+    // requests fall through to the original fetch. See docs/FORK-ONPREM-WIA.md.
+    globalThis.fetch = createNegotiateFetch(wiaAuthenticator, globalThis.fetch);
+    logger.debug("WIA mode: global fetch replaced with multi-leg Negotiate transport");
   }
 
   if (argv.authentication === "pat") {

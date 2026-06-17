@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-import { describe, expect, it, jest, beforeEach } from "@jest/globals";
+import { describe, expect, it, jest, beforeEach, afterEach } from "@jest/globals";
 
 jest.mock("../../src/logger.js", () => ({
   logger: {
@@ -34,7 +34,17 @@ const mockStep = jest.fn<(challenge: string) => Promise<string>>();
 const mockInitializeClient = jest.fn<(service: string, options?: Record<string, unknown>) => Promise<{ step: typeof mockStep }>>();
 jest.mock("kerberos", () => ({ initializeClient: mockInitializeClient }), { virtual: true });
 
-import { deriveServicePrincipal, WiaAuthenticator, createNegotiateRequestHandler } from "../../src/wia-auth";
+// Mock only node:https' `request` so createNegotiateFetch's transport is controllable;
+// everything else (Agent, get, ...) delegates to the real module. spyOn on the namespace
+// fights `clearMocks`, so a module mock with a `mock`-prefixed fn is the robust route.
+const mockHttpsRequest = jest.fn();
+jest.mock("node:https", () => {
+  const actual = jest.requireActual<typeof import("node:https")>("node:https");
+  return { ...actual, request: (...args: unknown[]) => mockHttpsRequest(...args) };
+});
+
+import { EventEmitter } from "node:events";
+import { deriveServicePrincipal, WiaAuthenticator, createNegotiateRequestHandler, createNegotiateFetch } from "../../src/wia-auth";
 import { createAuthenticator } from "../../src/auth";
 
 describe("WIA (Windows Integrated Auth)", () => {
@@ -171,6 +181,109 @@ describe("WIA (Windows Integrated Auth)", () => {
 
       expect(res).toBe(noContinuation);
       expect(requestRawWithCallback).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("createNegotiateFetch", () => {
+    interface ResponseSpec {
+      status: number;
+      statusText?: string;
+      headers?: Record<string, string | string[]>;
+      body?: string;
+    }
+
+    // Queue canned responses on the https.request mock. Returns the mock so tests can
+    // assert how each leg was sent (method, headers, body). Data/end are emitted on a
+    // later tick so sendOnce's listeners (attached inside the callback) are in place.
+    const stubHttps = (responses: ResponseSpec[]) =>
+      mockHttpsRequest.mockImplementation((...args: unknown[]) => {
+        const callback = args[2] as (res: unknown) => void;
+        const req = new EventEmitter() as EventEmitter & { write: jest.Mock; end: jest.Mock };
+        req.write = jest.fn();
+        req.end = jest.fn(() => {
+          const spec = responses.shift();
+          if (!spec) throw new Error("stubHttps: more requests were made than responses queued");
+          const res = new EventEmitter() as EventEmitter & { statusCode: number; statusMessage: string; headers: Record<string, string | string[]> };
+          res.statusCode = spec.status;
+          res.statusMessage = spec.statusText ?? "";
+          res.headers = spec.headers ?? {};
+          callback(res);
+          setImmediate(() => {
+            if (spec.body !== undefined) res.emit("data", Buffer.from(spec.body));
+            res.emit("end");
+          });
+        });
+        return req;
+      });
+
+    const authenticator = new WiaAuthenticator("https://ado.company.local/tfs/DefaultCollection");
+    const fallbackFetch = jest.fn<typeof fetch>();
+
+    afterEach(() => {
+      mockHttpsRequest.mockReset();
+      fallbackFetch.mockReset();
+    });
+
+    const patchInit = (body = '[{"op":"add"}]'): RequestInit => ({
+      method: "PATCH",
+      headers: { "Authorization": "Bearer wia-negotiate", "Content-Type": "application/json" },
+      body,
+    });
+
+    it("completes a single-leg handshake and returns a parseable Response", async () => {
+      const spy = stubHttps([{ status: 200, statusText: "OK", headers: { etag: "W/123" }, body: '{"count":1}' }]);
+      const doFetch = createNegotiateFetch(authenticator, fallbackFetch);
+
+      const res = await doFetch("https://ado.company.local/_apis/wit/$batch", patchInit());
+
+      expect(res.ok).toBe(true);
+      expect(res.status).toBe(200);
+      expect(res.headers.get("etag")).toBe("W/123");
+      await expect(res.json()).resolves.toEqual({ count: 1 });
+      expect(fallbackFetch).not.toHaveBeenCalled();
+      expect(spy).toHaveBeenCalledTimes(1);
+      const sentHeaders = (spy.mock.calls[0][1] as { headers: Record<string, string> }).headers;
+      expect(sentHeaders.Authorization).toBe("Negotiate BASE64-SPNEGO-TOKEN");
+      expect(sentHeaders["Accept-Encoding"]).toBe("identity");
+    });
+
+    it("steps through multiple legs, feeding back the server's continuation token", async () => {
+      mockStep.mockImplementation(async (challenge: string) => `TOKEN[${challenge}]`);
+      const spy = stubHttps([
+        { status: 401, headers: { "www-authenticate": "Negotiate SRV-CONT-1" } },
+        { status: 200, body: '{"ok":true}' },
+      ]);
+      const doFetch = createNegotiateFetch(authenticator, fallbackFetch);
+
+      const res = await doFetch("https://ado.company.local/_apis/wit/$batch", patchInit());
+
+      expect(res.status).toBe(200);
+      expect(spy).toHaveBeenCalledTimes(2);
+      expect(mockStep).toHaveBeenNthCalledWith(1, "");
+      expect(mockStep).toHaveBeenNthCalledWith(2, "SRV-CONT-1");
+      const leg2Headers = (spy.mock.calls[1][1] as { headers: Record<string, string> }).headers;
+      expect(leg2Headers.Authorization).toBe("Negotiate TOKEN[SRV-CONT-1]");
+    });
+
+    it("delegates requests without a Bearer header to the fallback fetch", async () => {
+      const spy = stubHttps([]);
+      fallbackFetch.mockResolvedValue(new Response(null, { status: 404 }));
+      const doFetch = createNegotiateFetch(authenticator, fallbackFetch);
+
+      await doFetch("https://vssps.dev.azure.com/contoso", { method: "HEAD" });
+
+      expect(fallbackFetch).toHaveBeenCalledTimes(1);
+      expect(spy).not.toHaveBeenCalled();
+    });
+
+    it("returns the 401 response when the handshake never settles", async () => {
+      const spy = stubHttps([{ status: 401, headers: { "www-authenticate": "Negotiate" }, body: "denied" }]);
+      const doFetch = createNegotiateFetch(authenticator, fallbackFetch);
+
+      const res = await doFetch("https://ado.company.local/_apis/wit/$batch", patchInit());
+
+      expect(res.status).toBe(401);
+      expect(spy).toHaveBeenCalledTimes(1); // no continuation token => give up after one leg
     });
   });
 });

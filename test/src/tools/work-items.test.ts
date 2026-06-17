@@ -57,6 +57,7 @@ interface MockConnection {
   getWorkItemTrackingApi: jest.Mock;
   getCoreApi: jest.Mock;
   serverUrl?: string;
+  rest?: { create: jest.Mock; update: jest.Mock };
 }
 
 describe("configureWorkItemTools", () => {
@@ -100,6 +101,9 @@ describe("configureWorkItemTools", () => {
       getWorkApi: jest.fn().mockResolvedValue(mockWorkApi),
       getWorkItemTrackingApi: jest.fn().mockResolvedValue(mockWorkItemTrackingApi),
       getCoreApi: jest.fn().mockResolvedValue({ getProjects: jest.fn() }),
+      // The comment add/update tools go through connection.rest (typed-rest-client) so they
+      // ride the WebApi auth handler (multi-leg Negotiate under WIA), not a raw global fetch.
+      rest: { create: jest.fn(), update: jest.fn() },
     };
 
     connectionProvider = jest.fn().mockResolvedValue(mockConnection);
@@ -807,14 +811,7 @@ describe("configureWorkItemTools", () => {
       const [, , , handler] = call;
 
       mockConnection.serverUrl = "https://dev.azure.com/contoso";
-      (tokenProvider as jest.Mock).mockResolvedValue("fake-token");
-
-      // Mock fetch for the API call
-      const mockFetch = jest.fn().mockResolvedValue({
-        ok: true,
-        text: () => Promise.resolve(JSON.stringify(_mockWorkItemComment)),
-      });
-      global.fetch = mockFetch;
+      (mockConnection.rest!.create as jest.Mock).mockResolvedValue({ statusCode: 200, result: _mockWorkItemComment, headers: {} });
 
       const params = {
         comment: "hello world!",
@@ -824,18 +821,9 @@ describe("configureWorkItemTools", () => {
 
       const result = await handler(params);
 
-      expect(mockFetch).toHaveBeenCalledWith(
-        "https://dev.azure.com/contoso/Contoso/_apis/wit/workItems/299/comments?format=0&api-version=7.2-preview.4",
-        expect.objectContaining({
-          method: "POST",
-          headers: expect.objectContaining({
-            "Authorization": "Bearer fake-token",
-            "Content-Type": "application/json",
-          }),
-        })
-      );
+      expect(mockConnection.rest!.create).toHaveBeenCalledWith("https://dev.azure.com/contoso/Contoso/_apis/wit/workItems/299/comments?format=0&api-version=7.2-preview.4", { text: "hello world!" });
 
-      expect(result.content[0].text).toBe(JSON.stringify(_mockWorkItemComment));
+      expect(result.content[0].text).toBe(JSON.stringify(_mockWorkItemComment, null, 2));
     });
 
     it("should call Add Work Item Comments API with the correct parameters and return the expected result with markdown format", async () => {
@@ -847,14 +835,7 @@ describe("configureWorkItemTools", () => {
       const [, , , handler] = call;
 
       mockConnection.serverUrl = "https://dev.azure.com/contoso";
-      (tokenProvider as jest.Mock).mockResolvedValue("fake-token");
-
-      // Mock fetch for the API call
-      const mockFetch = jest.fn().mockResolvedValue({
-        ok: true,
-        text: () => Promise.resolve(JSON.stringify(_mockWorkItemComment)),
-      });
-      global.fetch = mockFetch;
+      (mockConnection.rest!.create as jest.Mock).mockResolvedValue({ statusCode: 200, result: _mockWorkItemComment, headers: {} });
 
       const params = {
         comment: "hello world!",
@@ -865,18 +846,9 @@ describe("configureWorkItemTools", () => {
 
       const result = await handler(params);
 
-      expect(mockFetch).toHaveBeenCalledWith(
-        "https://dev.azure.com/contoso/Contoso/_apis/wit/workItems/299/comments?format=0&api-version=7.2-preview.4",
-        expect.objectContaining({
-          method: "POST",
-          headers: expect.objectContaining({
-            "Authorization": "Bearer fake-token",
-            "Content-Type": "application/json",
-          }),
-        })
-      );
+      expect(mockConnection.rest!.create).toHaveBeenCalledWith("https://dev.azure.com/contoso/Contoso/_apis/wit/workItems/299/comments?format=0&api-version=7.2-preview.4", { text: "hello world!" });
 
-      expect(result.content[0].text).toBe(JSON.stringify(_mockWorkItemComment));
+      expect(result.content[0].text).toBe(JSON.stringify(_mockWorkItemComment, null, 2));
     });
 
     it("should call Add Work Item Comments API with format=1 when format is Html", async () => {
@@ -887,16 +859,14 @@ describe("configureWorkItemTools", () => {
       const [, , , handler] = call;
 
       mockConnection.serverUrl = "https://dev.azure.com/contoso";
-      (tokenProvider as jest.Mock).mockResolvedValue("fake-token");
-      const mockFetch = jest.fn().mockResolvedValue({ ok: true, text: () => Promise.resolve(JSON.stringify(_mockWorkItemComment)) });
-      global.fetch = mockFetch;
+      (mockConnection.rest!.create as jest.Mock).mockResolvedValue({ statusCode: 200, result: _mockWorkItemComment, headers: {} });
 
       await handler({ comment: "hello world!", project: "Contoso", workItemId: 299, format: "Html" });
 
-      expect(mockFetch).toHaveBeenCalledWith("https://dev.azure.com/contoso/Contoso/_apis/wit/workItems/299/comments?format=1&api-version=7.2-preview.4", expect.objectContaining({ method: "POST" }));
+      expect(mockConnection.rest!.create).toHaveBeenCalledWith("https://dev.azure.com/contoso/Contoso/_apis/wit/workItems/299/comments?format=1&api-version=7.2-preview.4", { text: "hello world!" });
     });
 
-    it("should handle fetch failure response", async () => {
+    it("should handle API failure response", async () => {
       configureWorkItemTools(server, tokenProvider, connectionProvider, userAgentProvider);
 
       const call = (server.tool as jest.Mock).mock.calls.find(([toolName]) => toolName === "wit_add_work_item_comment");
@@ -905,14 +875,9 @@ describe("configureWorkItemTools", () => {
       const [, , , handler] = call;
 
       mockConnection.serverUrl = "https://dev.azure.com/contoso";
-      (tokenProvider as jest.Mock).mockResolvedValue("fake-token");
-
-      // Mock fetch for the API call
-      const mockFetch = jest.fn().mockResolvedValue({
-        ok: false,
-        statusText: "Not Found",
-      });
-      global.fetch = mockFetch;
+      // RestClient rejects on non-2xx (typed-rest-client throws a RestError), so the tool's
+      // catch surfaces the message.
+      (mockConnection.rest!.create as jest.Mock).mockRejectedValue(new Error("Failed request: (404)"));
 
       const params = {
         comment: "hello world!",
@@ -923,7 +888,7 @@ describe("configureWorkItemTools", () => {
       const result = await handler(params);
       expect(result.isError).toBe(true);
       expect(result.content[0].text).toContain("Error adding work item comment");
-      expect(result.content[0].text).toContain("Failed to add a work item comment: Not Found");
+      expect(result.content[0].text).toContain("Failed request: (404)");
     });
 
     it("should encode the project parameter to prevent URL path injection", async () => {
@@ -934,13 +899,7 @@ describe("configureWorkItemTools", () => {
       const [, , , handler] = call;
 
       mockConnection.serverUrl = "https://dev.azure.com/contoso";
-      (tokenProvider as jest.Mock).mockResolvedValue("fake-token");
-
-      const mockFetch = jest.fn().mockResolvedValue({
-        ok: true,
-        text: () => Promise.resolve(JSON.stringify({ id: 1, text: "comment" })),
-      });
-      global.fetch = mockFetch;
+      (mockConnection.rest!.create as jest.Mock).mockResolvedValue({ statusCode: 200, result: { id: 1, text: "comment" }, headers: {} });
 
       const maliciousProject = "../../_apis/hooks/subscriptions";
       const params = {
@@ -951,7 +910,7 @@ describe("configureWorkItemTools", () => {
 
       await handler(params);
 
-      const calledUrl = mockFetch.mock.calls[0][0] as string;
+      const calledUrl = (mockConnection.rest!.create as jest.Mock).mock.calls[0][0] as string;
       // The project must be encoded in the URL to prevent path traversal
       expect(calledUrl).toContain(encodeURIComponent(maliciousProject));
       expect(calledUrl).not.toContain("../../");
@@ -968,21 +927,16 @@ describe("configureWorkItemTools", () => {
       const [, , , handler] = call;
 
       mockConnection.serverUrl = "https://dev.azure.com/contoso";
-      (tokenProvider as jest.Mock).mockResolvedValue("fake-token");
-
-      const mockFetch = jest.fn().mockResolvedValue({
-        ok: true,
-        text: () =>
-          Promise.resolve(
-            JSON.stringify({
-              workItemId: 42,
-              id: 100,
-              version: 2,
-              text: "Updated comment text",
-            })
-          ),
+      (mockConnection.rest!.update as jest.Mock).mockResolvedValue({
+        statusCode: 200,
+        result: {
+          workItemId: 42,
+          id: 100,
+          version: 2,
+          text: "Updated comment text",
+        },
+        headers: {},
       });
-      global.fetch = mockFetch;
 
       const params = {
         project: "TestProject",
@@ -993,16 +947,9 @@ describe("configureWorkItemTools", () => {
 
       const result = await handler(params);
 
-      expect(mockFetch).toHaveBeenCalledWith(
-        "https://dev.azure.com/contoso/TestProject/_apis/wit/workItems/42/comments/100?format=0&api-version=7.2-preview.4",
-        expect.objectContaining({
-          method: "PATCH",
-          headers: expect.objectContaining({
-            "Authorization": "Bearer fake-token",
-            "Content-Type": "application/json",
-          }),
-        })
-      );
+      expect(mockConnection.rest!.update).toHaveBeenCalledWith("https://dev.azure.com/contoso/TestProject/_apis/wit/workItems/42/comments/100?format=0&api-version=7.2-preview.4", {
+        text: "Updated comment text",
+      });
 
       const parsed = JSON.parse(result.content[0].text);
       expect(parsed.text).toBe("Updated comment text");
@@ -1017,13 +964,7 @@ describe("configureWorkItemTools", () => {
       const [, , , handler] = call;
 
       mockConnection.serverUrl = "https://dev.azure.com/contoso";
-      (tokenProvider as jest.Mock).mockResolvedValue("fake-token");
-
-      const mockFetch = jest.fn().mockResolvedValue({
-        ok: false,
-        statusText: "Not Found",
-      });
-      global.fetch = mockFetch;
+      (mockConnection.rest!.update as jest.Mock).mockRejectedValue(new Error("Failed request: (404)"));
 
       const params = {
         project: "TestProject",
@@ -1035,7 +976,7 @@ describe("configureWorkItemTools", () => {
       const result = await handler(params);
       expect(result.isError).toBe(true);
       expect(result.content[0].text).toContain("Error updating work item comment");
-      expect(result.content[0].text).toContain("Failed to update work item comment: Not Found");
+      expect(result.content[0].text).toContain("Failed request: (404)");
     });
 
     it("should encode the project parameter to prevent URL path injection", async () => {
@@ -1046,13 +987,7 @@ describe("configureWorkItemTools", () => {
       const [, , , handler] = call;
 
       mockConnection.serverUrl = "https://dev.azure.com/contoso";
-      (tokenProvider as jest.Mock).mockResolvedValue("fake-token");
-
-      const mockFetch = jest.fn().mockResolvedValue({
-        ok: true,
-        text: () => Promise.resolve(JSON.stringify({ id: 1, text: "updated" })),
-      });
-      global.fetch = mockFetch;
+      (mockConnection.rest!.update as jest.Mock).mockResolvedValue({ statusCode: 200, result: { id: 1, text: "updated" }, headers: {} });
 
       const maliciousProject = "../../_apis/hooks/subscriptions/hookId";
       const params = {
@@ -1064,7 +999,7 @@ describe("configureWorkItemTools", () => {
 
       await handler(params);
 
-      const calledUrl = mockFetch.mock.calls[0][0] as string;
+      const calledUrl = (mockConnection.rest!.update as jest.Mock).mock.calls[0][0] as string;
       // The project must be encoded in the URL to prevent path traversal
       expect(calledUrl).toContain(encodeURIComponent(maliciousProject));
       expect(calledUrl).not.toContain("../../");
@@ -4850,11 +4785,10 @@ describe("configureWorkItemTools", () => {
 
       setupAcceptMocks();
       mockConnection.serverUrl = "https://dev.azure.com/contoso";
-      (tokenProvider as jest.Mock).mockResolvedValue("fake-token");
-      global.fetch = jest.fn().mockResolvedValue({ ok: true, text: () => Promise.resolve("{}") });
+      (mockConnection.rest!.create as jest.Mock).mockResolvedValue({ statusCode: 200, result: {}, headers: {} });
 
       await handler({ workItemId: 1, comment: "test comment" });
-      const calledUrl = (global.fetch as jest.Mock).mock.calls[0][0] as string;
+      const calledUrl = (mockConnection.rest!.create as jest.Mock).mock.calls[0][0] as string;
       expect(calledUrl).toContain("Contoso");
     });
 
@@ -4866,11 +4800,10 @@ describe("configureWorkItemTools", () => {
 
       setupAcceptMocks();
       mockConnection.serverUrl = "https://dev.azure.com/contoso";
-      (tokenProvider as jest.Mock).mockResolvedValue("fake-token");
-      global.fetch = jest.fn().mockResolvedValue({ ok: true, text: () => Promise.resolve("{}") });
+      (mockConnection.rest!.update as jest.Mock).mockResolvedValue({ statusCode: 200, result: {}, headers: {} });
 
       await handler({ workItemId: 1, commentId: 1, text: "updated" });
-      const calledUrl = (global.fetch as jest.Mock).mock.calls[0][0] as string;
+      const calledUrl = (mockConnection.rest!.update as jest.Mock).mock.calls[0][0] as string;
       expect(calledUrl).toContain("Contoso");
     });
 
@@ -5110,22 +5043,20 @@ describe("configureWorkItemTools", () => {
     it("update_work_item_comment: should use format=0 when format is markdown", async () => {
       const handler = getHandler("wit_update_work_item_comment");
       mockConnection.serverUrl = "https://dev.azure.com/contoso";
-      (tokenProvider as jest.Mock).mockResolvedValue("fake-token");
-      global.fetch = jest.fn().mockResolvedValue({ ok: true, text: () => Promise.resolve("{}") });
+      (mockConnection.rest!.update as jest.Mock).mockResolvedValue({ statusCode: 200, result: {}, headers: {} });
 
       await handler({ project: "P", workItemId: 1, commentId: 1, text: "updated", format: "Markdown" });
-      const calledUrl = (global.fetch as jest.Mock).mock.calls[0][0] as string;
+      const calledUrl = (mockConnection.rest!.update as jest.Mock).mock.calls[0][0] as string;
       expect(calledUrl).toContain("format=0");
     });
 
     it("update_work_item_comment: should use format=1 when format is Html", async () => {
       const handler = getHandler("wit_update_work_item_comment");
       mockConnection.serverUrl = "https://dev.azure.com/contoso";
-      (tokenProvider as jest.Mock).mockResolvedValue("fake-token");
-      global.fetch = jest.fn().mockResolvedValue({ ok: true, text: () => Promise.resolve("{}") });
+      (mockConnection.rest!.update as jest.Mock).mockResolvedValue({ statusCode: 200, result: {}, headers: {} });
 
       await handler({ project: "P", workItemId: 1, commentId: 1, text: "updated", format: "Html" });
-      const calledUrl = (global.fetch as jest.Mock).mock.calls[0][0] as string;
+      const calledUrl = (mockConnection.rest!.update as jest.Mock).mock.calls[0][0] as string;
       expect(calledUrl).toContain("format=1");
     });
 

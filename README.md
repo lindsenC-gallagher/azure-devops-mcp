@@ -108,7 +108,7 @@ On a **domain-joined Windows host on the corporate network/VPN**, you can skip t
 Notes:
 
 - Off the corporate network/VPN the on-prem host won't resolve, and WIA won't connect.
-- This is a spike: the typed `WebApi` tools (core, work, work-items, repositories, wiki, pipelines, test-plans) work; the few direct-`fetch` tools (`core_get_identity_ids`, search) will 401 under WIA. Details in [docs/FORK-ONPREM-WIA.md](./docs/FORK-ONPREM-WIA.md).
+- This is a spike: both the typed `WebApi` tools (core, work, work-items, repositories, wiki, pipelines, test-plans) and the direct-`fetch` tools now complete the multi-leg WIA handshake, so things like setting a work item's parent (`wit_work_items_link`) work. The search tools still fail on-prem because they target hosted-only endpoints, not because of auth. Details in [docs/FORK-ONPREM-WIA.md](./docs/FORK-ONPREM-WIA.md).
 
 ## Using With Claude Desktop
 

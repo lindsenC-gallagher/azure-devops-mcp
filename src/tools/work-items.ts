@@ -374,34 +374,18 @@ function configureWorkItemTools(server: McpServer, tokenProvider: () => Promise<
         }
 
         const orgUrl = connection.serverUrl;
-        const accessToken = await tokenProvider();
-
-        const body = {
-          text: comment,
-        };
-
         const formatParameter = (format ?? "Markdown") === "Markdown" ? 0 : 1;
-        const response = await fetch(
-          `${orgUrl}/${encodeURIComponent(resolvedProject)}/_apis/wit/workItems/${workItemId}/comments?format=${formatParameter}&api-version=${markdownCommentsApiVersion}`,
-          {
-            method: "POST",
-            headers: {
-              "Authorization": `Bearer ${accessToken}`,
-              "Content-Type": "application/json",
-              "User-Agent": userAgentProvider(),
-            },
-            body: JSON.stringify(body),
-          }
-        );
+        const url = `${orgUrl}/${encodeURIComponent(resolvedProject)}/_apis/wit/workItems/${workItemId}/comments?format=${formatParameter}&api-version=${markdownCommentsApiVersion}`;
 
-        if (!response.ok) {
-          throw new Error(`Failed to add a work item comment: ${response.statusText}}`);
-        }
-
-        const comments = await response.text();
+        // Route through the WebApi's RestClient (typed-rest-client) instead of a raw `fetch`:
+        // the RestClient carries the connection's auth handler, so this completes the multi-leg
+        // SPNEGO/Negotiate handshake under Windows Integrated Auth (and stays correct for PAT /
+        // cloud token auth). A raw `fetch` only gets single-leg auth from the global interceptor
+        // and 401s against multi-leg on-prem servers. See docs/FORK-ONPREM-WIA.md.
+        const response = await connection.rest.create(url, { text: comment });
 
         return {
-          content: [{ type: "text", text: comments }],
+          content: [{ type: "text", text: JSON.stringify(response.result, null, 2) }],
         };
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : "Unknown error occurred";
@@ -435,31 +419,15 @@ function configureWorkItemTools(server: McpServer, tokenProvider: () => Promise<
         }
 
         const orgUrl = connection.serverUrl;
-        const accessToken = await tokenProvider();
-        const body: Record<string, string> = { text };
         const formatParameter = (format ?? "Markdown") === "Markdown" ? 0 : 1;
+        const url = `${orgUrl}/${encodeURIComponent(resolvedProject)}/_apis/wit/workItems/${workItemId}/comments/${commentId}?format=${formatParameter}&api-version=${markdownCommentsApiVersion}`;
 
-        const response = await fetch(
-          `${orgUrl}/${encodeURIComponent(resolvedProject)}/_apis/wit/workItems/${workItemId}/comments/${commentId}?format=${formatParameter}&api-version=${markdownCommentsApiVersion}`,
-          {
-            method: "PATCH",
-            headers: {
-              "Authorization": `Bearer ${accessToken}`,
-              "Content-Type": "application/json",
-              "User-Agent": userAgentProvider(),
-            },
-            body: JSON.stringify(body),
-          }
-        );
-
-        if (!response.ok) {
-          throw new Error(`Failed to update work item comment: ${response.statusText}`);
-        }
-
-        const updatedComment = await response.text();
+        // See add_work_item_comment: route through the RestClient so WIA's multi-leg Negotiate
+        // handshake is honoured (a raw `fetch` is single-leg only). update() issues a PATCH.
+        const response = await connection.rest.update(url, { text });
 
         return {
-          content: [{ type: "text", text: updatedComment }],
+          content: [{ type: "text", text: JSON.stringify(response.result, null, 2) }],
         };
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : "Unknown error occurred";

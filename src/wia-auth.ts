@@ -127,9 +127,9 @@ export class WiaAuthenticator {
   }
 
   /**
-   * Produce the first-leg base64 Negotiate token. Used by the direct-`fetch` path,
-   * which can only attempt single-leg auth. The WebApi handler uses createClient()
-   * directly so it can step through every leg.
+   * Produce the first-leg base64 Negotiate token. Retained for single-leg callers and
+   * tests; the direct-`fetch` path now uses createNegotiateFetch (which steps through
+   * every leg), and the WebApi handler uses createClient() directly.
    */
   async getNegotiateToken(): Promise<string> {
     const client = await this.createClient();
@@ -220,5 +220,142 @@ export function createNegotiateRequestHandler(authenticator: WiaAuthenticator, m
       logger.warn(`WiaAuthenticator: SPNEGO handshake did not settle within ${maxLegs} legs`);
       return response as IHttpClientResponse;
     },
+  };
+}
+
+/** The minimal slice of a node http(s) response we collect to build a fetch Response. */
+interface RawHttpResponse {
+  status: number;
+  statusText: string;
+  headers: http.IncomingHttpHeaders;
+  body: Buffer;
+}
+
+/**
+ * Issue a single request via node:http(s) on the supplied agent, buffering the whole
+ * body. `agent` is a pinned keep-alive agent so every SPNEGO leg rides one socket.
+ */
+function sendOnce(
+  httpModule: typeof http | typeof https,
+  url: URL,
+  method: string,
+  headers: Record<string, string>,
+  agent: http.Agent | https.Agent,
+  body: string | undefined
+): Promise<RawHttpResponse> {
+  return new Promise<RawHttpResponse>((resolve, reject) => {
+    const req = httpModule.request(url, { method, headers, agent }, (res) => {
+      const chunks: Buffer[] = [];
+      res.on("data", (chunk: Buffer) => chunks.push(chunk));
+      res.on("end", () => {
+        resolve({
+          status: res.statusCode ?? 0,
+          statusText: res.statusMessage ?? "",
+          headers: res.headers,
+          body: Buffer.concat(chunks),
+        });
+      });
+      res.on("error", reject);
+    });
+    req.on("error", reject);
+    if (body !== undefined) {
+      req.write(body);
+    }
+    req.end();
+  });
+}
+
+/**
+ * Build a `fetch`-compatible function that completes a multi-leg SPNEGO handshake for
+ * the direct-`fetch` tools (`tools/auth.ts`, the `wit_*_$batch` helpers, etc.).
+ *
+ * Why not the platform fetch / an undici dispatcher? Node's global `fetch` is backed by
+ * the bundled undici, which gives no socket affinity across the 401 challenge — so it can
+ * only attempt a single Negotiate leg, which fails against a server that requires the
+ * 3-leg MIC exchange. node:http(s) with a `maxSockets: 1` keep-alive agent pins all legs
+ * to one TCP connection — the same technique createNegotiateRequestHandler uses for the
+ * typed WebApi path. Once the connection is authenticated, keep-alive lets later requests
+ * reuse it.
+ *
+ * Requests without a `Bearer` Authorization header (e.g. the anonymous tenant probe) are
+ * delegated to `fallbackFetch` unchanged, mirroring the old interceptor's behaviour.
+ */
+export function createNegotiateFetch(authenticator: WiaAuthenticator, fallbackFetch: typeof fetch, maxLegs: number = MAX_NEGOTIATE_LEGS): typeof fetch {
+  // One pinned keep-alive socket per origin. maxSockets: 1 serializes requests to a host
+  // (fine for an MCP server) and guarantees a handshake is never interleaved with another
+  // request on the same connection.
+  const agents = new Map<string, http.Agent | https.Agent>();
+  function agentFor(url: URL): http.Agent | https.Agent {
+    let agent = agents.get(url.origin);
+    if (!agent) {
+      agent = url.protocol === "https:" ? new https.Agent({ keepAlive: true, maxSockets: 1 }) : new http.Agent({ keepAlive: true, maxSockets: 1 });
+      agents.set(url.origin, agent);
+    }
+    return agent;
+  }
+
+  return async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    const request = new Request(input as RequestInfo, init);
+
+    // Only Negotiate-handle requests carrying the Bearer placeholder; pass everything else
+    // (anonymous probes, already-authed requests) straight through to the platform fetch.
+    if (!request.headers.get("Authorization")?.startsWith("Bearer ")) {
+      return fallbackFetch(input, init);
+    }
+
+    const url = new URL(request.url);
+    const httpModule = url.protocol === "https:" ? https : http;
+    const agent = agentFor(url);
+    const body = request.method === "GET" || request.method === "HEAD" ? undefined : await request.text();
+
+    // Copy request headers minus the Bearer placeholder; force identity encoding because
+    // node:http (unlike fetch) does not auto-decompress, so the buffered body stays readable.
+    const baseHeaders: Record<string, string> = {};
+    request.headers.forEach((value, key) => {
+      if (key.toLowerCase() !== "authorization") {
+        baseHeaders[key] = value;
+      }
+    });
+    baseHeaders["Accept-Encoding"] = "identity";
+    baseHeaders["Connection"] = "keep-alive";
+
+    const client = await authenticator.createClient();
+    let challenge = "";
+    let last: RawHttpResponse | undefined;
+
+    for (let leg = 0; leg < maxLegs; leg++) {
+      const token = await client.step(challenge);
+      last = await sendOnce(httpModule, url, request.method, { ...baseHeaders, Authorization: `Negotiate ${token}` }, agent, body);
+      if (last.status !== 401) {
+        logger.debug(`createNegotiateFetch: handshake settled on leg ${leg + 1} with status ${last.status}`);
+        break;
+      }
+      const serverToken = extractServerNegotiateToken(last.headers["www-authenticate"]);
+      if (!serverToken) {
+        // Server won't continue the handshake (e.g. fell back to a scheme we don't do).
+        break;
+      }
+      challenge = serverToken;
+    }
+
+    if (!last) {
+      throw new Error(`createNegotiateFetch: no response produced for ${request.method} ${url.href}`);
+    }
+    if (last.status === 401) {
+      logger.warn(`createNegotiateFetch: SPNEGO handshake did not settle within ${maxLegs} legs for ${url.href}`);
+    }
+
+    const responseHeaders = new Headers();
+    for (const [key, value] of Object.entries(last.headers)) {
+      // Drop framing/length headers: we buffered an identity-encoded body, so Response
+      // recomputes content-length, and a stale content-encoding would mislead consumers.
+      if (value === undefined || ["content-length", "content-encoding", "transfer-encoding", "connection"].includes(key.toLowerCase())) {
+        continue;
+      }
+      responseHeaders.set(key, Array.isArray(value) ? value.join(", ") : value);
+    }
+    // A body is disallowed for null-body statuses; the $batch path returns 200 with a body.
+    const nullBody = [101, 204, 205, 304].includes(last.status);
+    return new Response(nullBody ? null : new Uint8Array(last.body), { status: last.status, statusText: last.statusText, headers: responseHeaders });
   };
 }

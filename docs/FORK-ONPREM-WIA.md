@@ -7,8 +7,9 @@ PowerShell's `Invoke-RestMethod -UseDefaultCredentials`.
 
 > **Status: experimental spike — validated against live on-prem TFS.** The WebApi
 > path completes a full multi-leg SPNEGO handshake and `core_list_projects` returns
-> real data with no PAT. Not hardened, not the default, and direct-`fetch` tools are
-> not covered yet. See _Limitations_ before relying on it.
+> real data with no PAT. Direct-`fetch` tools now complete the same multi-leg handshake
+> via a node:`http(s)` transport (see below). Not hardened, not the default. See
+> _Limitations_ before relying on it.
 
 ## Why
 
@@ -47,10 +48,20 @@ the approach a sibling team took with a PowerShell `tfs.ps1` script
 The MCP makes HTTP calls two ways, so WIA hooks both:
 
 - **`WebApi` connection** (typed-rest-client) → the Negotiate `IRequestHandler` above
-  (`getAzureDevOpsClient` in `src/index.ts`).
-- **Direct `fetch` tools** (`tools/auth.ts`, search, etc.) → a `globalThis.fetch`
-  interceptor in `src/index.ts` rewrites `Authorization: Bearer <placeholder>` to a
-  freshly minted `Authorization: Negotiate <token>`.
+  (`getAzureDevOpsClient` in `src/index.ts`). This is the multi-leg-capable path. Tools
+  that need a REST endpoint the typed client doesn't expose (e.g. the markdown work-item
+  comment endpoints) can still ride it by calling `connection.rest` / `connection.http`
+  directly instead of a raw `fetch` — that's how `wit_add_work_item_comment` and
+  `wit_update_work_item_comment` are wired.
+- **Direct `fetch` tools** (`tools/auth.ts`, the `wit_*_$batch` helpers, etc.) → in
+  `src/index.ts`, `globalThis.fetch` is **replaced** with `createNegotiateFetch`
+  (`src/wia-auth.ts`). For any request carrying the `Bearer <placeholder>` header it runs
+  the **full multi-leg** SPNEGO handshake over node:`http(s)` on a `maxSockets: 1`
+  keep-alive agent — the same socket-pinning technique as the WebApi handler — then returns
+  a standard `Response`. Requests without a Bearer header (e.g. the anonymous tenant probe)
+  fall through to the platform fetch. This replaces the earlier single-leg header-rewrite
+  interceptor, which 401'd under WIA because undici gives no socket affinity across the
+  401 challenge.
 
 ### 4) `kerberos` is an optional dependency
 
@@ -71,13 +82,17 @@ One-time on the host: `npm install kerberos` (requires the platform build toolch
 
 ## Limitations (read before relying on this)
 
-- **`WebApi` tools only.** The typed `WebApi` connection (core, work, work-items, repos,
-  wiki, pipelines, test-plans) is fully handled and validated. The **direct-`fetch`
-  tools are not multi-leg capable** — `tools/auth.ts` (`core_get_identity_ids`) and the
-  search tools set a single `Negotiate` header via the fetch interceptor, but undici
-  gives no socket affinity to complete the handshake, so they will 401 under WIA. The
-  search domain is already on-prem-unsupported in this fork regardless. Making the fetch
-  tools work needs a dedicated multi-leg `https` helper (follow-up).
+- **Both transports now complete the multi-leg handshake.** The typed `WebApi`
+  connection (core, work, work-items, repos, wiki, pipelines, test-plans) is fully handled
+  and validated, and the direct-`fetch` tools now ride the `createNegotiateFetch` transport
+  described above, so `wit_work_items_link`, `wit_add_child_work_items`,
+  `wit_add_artifact_link`, and `core_get_identity_ids` (`getCurrentUserDetails`) authenticate
+  under WIA instead of 401'ing. `wit_add_work_item_comment` / `wit_update_work_item_comment`
+  remain on `connection.rest`, which is fine — they were already multi-leg capable.
+- **A few tools target hosted-only endpoints, so they still fail on-prem for a non-auth
+  reason.** The search domain (`almsearch.dev.azure.com`) and the identity _search_ in
+  `core_get_identity_ids` (`vssps.dev.azure.com`) hit cloud hostnames that don't exist on a
+  TFS collection. The auth transport is no longer the blocker there; the endpoint URL is.
 - **SPNEGO/Kerberos only.** Gallagher's TFS completes the handshake in 3 legs (a MIC
   exchange), which this handler does. **NTLM is not implemented** — it uses a different
   message format. If a server offers _only_ NTLM (no Kerberos SPN, IP-address URL,
@@ -93,8 +108,10 @@ One-time on the host: `npm install kerberos` (requires the platform build toolch
 ## Tests
 
 - `test/src/wia-auth.test.ts` — SPN derivation, the `wia` placeholder authenticator,
-  `getNegotiateToken` (with a virtual `kerberos` mock), and the Negotiate request
-  handler's 401 detection + retry-header behavior.
+  `getNegotiateToken` (with a virtual `kerberos` mock), the Negotiate request handler's
+  401 detection + retry-header behavior, and `createNegotiateFetch` (single-leg success,
+  multi-leg continuation-token feedback, non-Bearer passthrough, and the unsettled-401
+  give-up path — with node:`https` `request` mocked).
 
 ## Validation (done — 2026-06-05)
 
