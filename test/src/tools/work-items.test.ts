@@ -57,7 +57,7 @@ interface MockConnection {
   getWorkItemTrackingApi: jest.Mock;
   getCoreApi: jest.Mock;
   serverUrl?: string;
-  rest?: { create: jest.Mock; update: jest.Mock };
+  rest: { create: jest.Mock; update: jest.Mock };
 }
 
 describe("configureWorkItemTools", () => {
@@ -811,7 +811,7 @@ describe("configureWorkItemTools", () => {
       const [, , , handler] = call;
 
       mockConnection.serverUrl = "https://dev.azure.com/contoso";
-      (mockConnection.rest!.create as jest.Mock).mockResolvedValue({ statusCode: 200, result: _mockWorkItemComment, headers: {} });
+      (mockConnection.rest.create as jest.Mock).mockResolvedValue({ statusCode: 200, result: _mockWorkItemComment, headers: {} });
 
       const params = {
         comment: "hello world!",
@@ -821,7 +821,7 @@ describe("configureWorkItemTools", () => {
 
       const result = await handler(params);
 
-      expect(mockConnection.rest!.create).toHaveBeenCalledWith("https://dev.azure.com/contoso/Contoso/_apis/wit/workItems/299/comments?format=0&api-version=7.2-preview.4", { text: "hello world!" });
+      expect(mockConnection.rest.create).toHaveBeenCalledWith("https://dev.azure.com/contoso/Contoso/_apis/wit/workItems/299/comments?format=0&api-version=7.2-preview.4", { text: "hello world!" });
 
       expect(result.content[0].text).toBe(JSON.stringify(_mockWorkItemComment, null, 2));
     });
@@ -835,7 +835,7 @@ describe("configureWorkItemTools", () => {
       const [, , , handler] = call;
 
       mockConnection.serverUrl = "https://dev.azure.com/contoso";
-      (mockConnection.rest!.create as jest.Mock).mockResolvedValue({ statusCode: 200, result: _mockWorkItemComment, headers: {} });
+      (mockConnection.rest.create as jest.Mock).mockResolvedValue({ statusCode: 200, result: _mockWorkItemComment, headers: {} });
 
       const params = {
         comment: "hello world!",
@@ -846,7 +846,7 @@ describe("configureWorkItemTools", () => {
 
       const result = await handler(params);
 
-      expect(mockConnection.rest!.create).toHaveBeenCalledWith("https://dev.azure.com/contoso/Contoso/_apis/wit/workItems/299/comments?format=0&api-version=7.2-preview.4", { text: "hello world!" });
+      expect(mockConnection.rest.create).toHaveBeenCalledWith("https://dev.azure.com/contoso/Contoso/_apis/wit/workItems/299/comments?format=0&api-version=7.2-preview.4", { text: "hello world!" });
 
       expect(result.content[0].text).toBe(JSON.stringify(_mockWorkItemComment, null, 2));
     });
@@ -859,11 +859,11 @@ describe("configureWorkItemTools", () => {
       const [, , , handler] = call;
 
       mockConnection.serverUrl = "https://dev.azure.com/contoso";
-      (mockConnection.rest!.create as jest.Mock).mockResolvedValue({ statusCode: 200, result: _mockWorkItemComment, headers: {} });
+      (mockConnection.rest.create as jest.Mock).mockResolvedValue({ statusCode: 200, result: _mockWorkItemComment, headers: {} });
 
       await handler({ comment: "hello world!", project: "Contoso", workItemId: 299, format: "Html" });
 
-      expect(mockConnection.rest!.create).toHaveBeenCalledWith("https://dev.azure.com/contoso/Contoso/_apis/wit/workItems/299/comments?format=1&api-version=7.2-preview.4", { text: "hello world!" });
+      expect(mockConnection.rest.create).toHaveBeenCalledWith("https://dev.azure.com/contoso/Contoso/_apis/wit/workItems/299/comments?format=1&api-version=7.2-preview.4", { text: "hello world!" });
     });
 
     it("should handle API failure response", async () => {
@@ -877,7 +877,7 @@ describe("configureWorkItemTools", () => {
       mockConnection.serverUrl = "https://dev.azure.com/contoso";
       // RestClient rejects on non-2xx (typed-rest-client throws a RestError), so the tool's
       // catch surfaces the message.
-      (mockConnection.rest!.create as jest.Mock).mockRejectedValue(new Error("Failed request: (404)"));
+      (mockConnection.rest.create as jest.Mock).mockRejectedValue(new Error("Failed request: (404)"));
 
       const params = {
         comment: "hello world!",
@@ -899,7 +899,7 @@ describe("configureWorkItemTools", () => {
       const [, , , handler] = call;
 
       mockConnection.serverUrl = "https://dev.azure.com/contoso";
-      (mockConnection.rest!.create as jest.Mock).mockResolvedValue({ statusCode: 200, result: { id: 1, text: "comment" }, headers: {} });
+      (mockConnection.rest.create as jest.Mock).mockResolvedValue({ statusCode: 200, result: { id: 1, text: "comment" }, headers: {} });
 
       const maliciousProject = "../../_apis/hooks/subscriptions";
       const params = {
@@ -910,7 +910,7 @@ describe("configureWorkItemTools", () => {
 
       await handler(params);
 
-      const calledUrl = (mockConnection.rest!.create as jest.Mock).mock.calls[0][0] as string;
+      const calledUrl = (mockConnection.rest.create as jest.Mock).mock.calls[0][0] as string;
       // The project must be encoded in the URL to prevent path traversal
       expect(calledUrl).toContain(encodeURIComponent(maliciousProject));
       expect(calledUrl).not.toContain("../../");
@@ -927,7 +927,7 @@ describe("configureWorkItemTools", () => {
       const [, , , handler] = call;
 
       mockConnection.serverUrl = "https://dev.azure.com/contoso";
-      (mockConnection.rest!.update as jest.Mock).mockResolvedValue({
+      (mockConnection.rest.update as jest.Mock).mockResolvedValue({
         statusCode: 200,
         result: {
           workItemId: 42,
@@ -947,7 +947,7 @@ describe("configureWorkItemTools", () => {
 
       const result = await handler(params);
 
-      expect(mockConnection.rest!.update).toHaveBeenCalledWith("https://dev.azure.com/contoso/TestProject/_apis/wit/workItems/42/comments/100?format=0&api-version=7.2-preview.4", {
+      expect(mockConnection.rest.update).toHaveBeenCalledWith("https://dev.azure.com/contoso/TestProject/_apis/wit/workItems/42/comments/100?format=0&api-version=7.2-preview.4", {
         text: "Updated comment text",
       });
 
@@ -964,7 +964,7 @@ describe("configureWorkItemTools", () => {
       const [, , , handler] = call;
 
       mockConnection.serverUrl = "https://dev.azure.com/contoso";
-      (mockConnection.rest!.update as jest.Mock).mockRejectedValue(new Error("Failed request: (404)"));
+      (mockConnection.rest.update as jest.Mock).mockRejectedValue(new Error("Failed request: (404)"));
 
       const params = {
         project: "TestProject",
@@ -987,7 +987,7 @@ describe("configureWorkItemTools", () => {
       const [, , , handler] = call;
 
       mockConnection.serverUrl = "https://dev.azure.com/contoso";
-      (mockConnection.rest!.update as jest.Mock).mockResolvedValue({ statusCode: 200, result: { id: 1, text: "updated" }, headers: {} });
+      (mockConnection.rest.update as jest.Mock).mockResolvedValue({ statusCode: 200, result: { id: 1, text: "updated" }, headers: {} });
 
       const maliciousProject = "../../_apis/hooks/subscriptions/hookId";
       const params = {
@@ -999,7 +999,7 @@ describe("configureWorkItemTools", () => {
 
       await handler(params);
 
-      const calledUrl = (mockConnection.rest!.update as jest.Mock).mock.calls[0][0] as string;
+      const calledUrl = (mockConnection.rest.update as jest.Mock).mock.calls[0][0] as string;
       // The project must be encoded in the URL to prevent path traversal
       expect(calledUrl).toContain(encodeURIComponent(maliciousProject));
       expect(calledUrl).not.toContain("../../");
@@ -4785,10 +4785,10 @@ describe("configureWorkItemTools", () => {
 
       setupAcceptMocks();
       mockConnection.serverUrl = "https://dev.azure.com/contoso";
-      (mockConnection.rest!.create as jest.Mock).mockResolvedValue({ statusCode: 200, result: {}, headers: {} });
+      (mockConnection.rest.create as jest.Mock).mockResolvedValue({ statusCode: 200, result: {}, headers: {} });
 
       await handler({ workItemId: 1, comment: "test comment" });
-      const calledUrl = (mockConnection.rest!.create as jest.Mock).mock.calls[0][0] as string;
+      const calledUrl = (mockConnection.rest.create as jest.Mock).mock.calls[0][0] as string;
       expect(calledUrl).toContain("Contoso");
     });
 
@@ -4800,10 +4800,10 @@ describe("configureWorkItemTools", () => {
 
       setupAcceptMocks();
       mockConnection.serverUrl = "https://dev.azure.com/contoso";
-      (mockConnection.rest!.update as jest.Mock).mockResolvedValue({ statusCode: 200, result: {}, headers: {} });
+      (mockConnection.rest.update as jest.Mock).mockResolvedValue({ statusCode: 200, result: {}, headers: {} });
 
       await handler({ workItemId: 1, commentId: 1, text: "updated" });
-      const calledUrl = (mockConnection.rest!.update as jest.Mock).mock.calls[0][0] as string;
+      const calledUrl = (mockConnection.rest.update as jest.Mock).mock.calls[0][0] as string;
       expect(calledUrl).toContain("Contoso");
     });
 
@@ -5043,20 +5043,20 @@ describe("configureWorkItemTools", () => {
     it("update_work_item_comment: should use format=0 when format is markdown", async () => {
       const handler = getHandler("wit_update_work_item_comment");
       mockConnection.serverUrl = "https://dev.azure.com/contoso";
-      (mockConnection.rest!.update as jest.Mock).mockResolvedValue({ statusCode: 200, result: {}, headers: {} });
+      (mockConnection.rest.update as jest.Mock).mockResolvedValue({ statusCode: 200, result: {}, headers: {} });
 
       await handler({ project: "P", workItemId: 1, commentId: 1, text: "updated", format: "Markdown" });
-      const calledUrl = (mockConnection.rest!.update as jest.Mock).mock.calls[0][0] as string;
+      const calledUrl = (mockConnection.rest.update as jest.Mock).mock.calls[0][0] as string;
       expect(calledUrl).toContain("format=0");
     });
 
     it("update_work_item_comment: should use format=1 when format is Html", async () => {
       const handler = getHandler("wit_update_work_item_comment");
       mockConnection.serverUrl = "https://dev.azure.com/contoso";
-      (mockConnection.rest!.update as jest.Mock).mockResolvedValue({ statusCode: 200, result: {}, headers: {} });
+      (mockConnection.rest.update as jest.Mock).mockResolvedValue({ statusCode: 200, result: {}, headers: {} });
 
       await handler({ project: "P", workItemId: 1, commentId: 1, text: "updated", format: "Html" });
-      const calledUrl = (mockConnection.rest!.update as jest.Mock).mock.calls[0][0] as string;
+      const calledUrl = (mockConnection.rest.update as jest.Mock).mock.calls[0][0] as string;
       expect(calledUrl).toContain("format=1");
     });
 
