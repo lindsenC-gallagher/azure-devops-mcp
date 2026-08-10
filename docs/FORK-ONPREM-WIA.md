@@ -51,8 +51,7 @@ The MCP makes HTTP calls two ways, so WIA hooks both:
   (`getAzureDevOpsClient` in `src/index.ts`). This is the multi-leg-capable path. Tools
   that need a REST endpoint the typed client doesn't expose (e.g. the markdown work-item
   comment endpoints) can still ride it by calling `connection.rest` / `connection.http`
-  directly instead of a raw `fetch` — that's how `wit_add_work_item_comment` and
-  `wit_update_work_item_comment` are wired.
+  directly instead of a raw `fetch`.
 - **Direct `fetch` tools** (`tools/auth.ts`, the `wit_*_$batch` helpers, etc.) → in
   `src/index.ts`, `globalThis.fetch` is **replaced** with `createNegotiateFetch`
   (`src/wia-auth.ts`). For any request carrying the `Bearer <placeholder>` header it runs
@@ -85,10 +84,9 @@ One-time on the host: `npm install kerberos` (requires the platform build toolch
 - **Both transports now complete the multi-leg handshake.** The typed `WebApi`
   connection (core, work, work-items, repos, wiki, pipelines, test-plans) is fully handled
   and validated, and the direct-`fetch` tools now ride the `createNegotiateFetch` transport
-  described above, so `wit_work_items_link`, `wit_add_child_work_items`,
-  `wit_add_artifact_link`, and `core_get_identity_ids` (`getCurrentUserDetails`) authenticate
-  under WIA instead of 401'ing. `wit_add_work_item_comment` / `wit_update_work_item_comment`
-  remain on `connection.rest`, which is fine — they were already multi-leg capable.
+  described above, so `wit_work_item_link_write`, `wit_work_item_write` (`add_child`),
+  `wit_work_item_comment_write`, and `core_get_identity_ids` (`getCurrentUserDetails`)
+  authenticate under WIA instead of 401'ing.
 - **A few tools target hosted-only endpoints, so they still fail on-prem for a non-auth
   reason.** The search domain (`almsearch.dev.azure.com`) and the identity _search_ in
   `core_get_identity_ids` (`vssps.dev.azure.com`) hit cloud hostnames that don't exist on a

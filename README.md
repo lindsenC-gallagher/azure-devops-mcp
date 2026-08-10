@@ -40,16 +40,30 @@ These are the deltas vs `microsoft/azure-devops-mcp` (`main`). For the full rati
 | PAT auth               | Now accepts a raw PAT via `ADO_PAT` (preferred) or `PERSONAL_ACCESS_TOKEN`. Legacy base64 `email:pat` in `PERSONAL_ACCESS_TOKEN` is still supported for compatibility.                                                                                              |
 | PAT Basic-auth rewrite | The `Authorization` header rewriting for direct `fetch` calls now uses `Basic base64(:<pat>)`, the standard PAT form.                                                                                                                                               |
 | Identity API           | `src/tools/auth.ts` now picks the right identities endpoint per deployment — hosted keeps `vssps.dev.azure.com`, on-prem uses `<serverUrl>/_apis/identities`.                                                                                                       |
-| Search tools           | Search tools detect on-prem and return a clear "unsupported on this deployment" message instead of calling hosted-only `almsearch.dev.azure.com` endpoints.                                                                                                         |
+| Search tools           | `search_*` and `repo_search_commits` detect on-prem and return a clear "unsupported on this deployment" message instead of calling hosted-only `almsearch.dev.azure.com` endpoints.                                                                                 |
 | New helper module      | `src/deployment.ts` — normalizes deployment context (hosted vs on-prem), derives endpoint base URLs.                                                                                                                                                                |
 | New fork docs          | [docs/FORK-ONPREM-PAT.md](./docs/FORK-ONPREM-PAT.md), this README.                                                                                                                                                                                                  |
 | New tests              | `test/src/deployment.test.ts`, additions in `test/src/pat-auth.test.ts`, `test/src/tools/auth.test.ts`, `test/src/tools/search.test.ts`.                                                                                                                            |
 | Inline image uploads   | New `wit_create_work_item_attachment` tool — upload an image as a work item attachment (base64 in) and get back the URL to embed in HTML body fields via `<img src>`.                                                                                               |
 | WIA auth (spike)       | New experimental `--authentication wia` mode: PAT-free multi-leg SPNEGO/Kerberos auth as the logged-in user via the optional native `kerberos` module. Validated against live on-prem TFS (WebApi tools). See [docs/FORK-ONPREM-WIA.md](./docs/FORK-ONPREM-WIA.md). |
 
+### Upstream tool consolidation (breaking)
+
+As of the upstream v2.9.0 sync, upstream renamed and merged most tools. Many small tools became one tool with an `action` parameter, so any skill, prompt, or allowlist that names a tool needs updating. Examples:
+
+| Before                                                      | After                                                       |
+| ----------------------------------------------------------- | ----------------------------------------------------------- |
+| `wit_get_work_item`, `wit_my_work_items`, ...               | `wit_work_item` with `action: get` / `my` / ...             |
+| `wit_create_work_item`, `wit_update_work_item`, ...         | `wit_work_item_write` with `action: create` / `update`      |
+| `wit_add_work_item_comment`, `wit_update_work_item_comment` | `wit_work_item_comment_write` with `action: add` / `update` |
+| `wit_query_by_wiql`, `wit_get_query`                        | `wit_query` with `action: wiql` / `get`                     |
+| `repo_get_repo_by_name_or_id`, `repo_list_repos_by_project` | `repo_repository` with `action: get` / `list`               |
+
+The fork's own `wit_create_work_item_attachment` keeps its name. The full list is in [docs/TOOLSET.md](./docs/TOOLSET.md).
+
 ### Known limitations of the fork
 
-- `search_*` tools remain hosted-only.
+- `search_*` and `repo_search_commits` remain hosted-only.
 - API versions are still pinned to upstream defaults (`7.2-preview.*`). Older on-prem releases may need version-compatibility work.
 
 ## Using With Claude Code
@@ -108,7 +122,7 @@ On a **domain-joined Windows host on the corporate network/VPN**, you can skip t
 Notes:
 
 - Off the corporate network/VPN the on-prem host won't resolve, and WIA won't connect.
-- This is a spike: both the typed `WebApi` tools (core, work, work-items, repositories, wiki, pipelines, test-plans) and the direct-`fetch` tools now complete the multi-leg WIA handshake, so things like setting a work item's parent (`wit_work_items_link`) work. The search tools still fail on-prem because they target hosted-only endpoints, not because of auth. Details in [docs/FORK-ONPREM-WIA.md](./docs/FORK-ONPREM-WIA.md).
+- This is a spike: both the typed `WebApi` tools (core, work, work-items, repositories, wiki, pipelines, test-plans) and the direct-`fetch` tools now complete the multi-leg WIA handshake, so things like setting a work item's parent (`wit_work_item_link_write`) work. The search tools still fail on-prem because they target hosted-only endpoints, not because of auth. Details in [docs/FORK-ONPREM-WIA.md](./docs/FORK-ONPREM-WIA.md).
 
 ## Using With Claude Desktop
 
