@@ -45,6 +45,7 @@ These are the deltas vs `microsoft/azure-devops-mcp` (`main`). For the full rati
 | New fork docs          | [docs/FORK-ONPREM-PAT.md](./docs/FORK-ONPREM-PAT.md), this README.                                                                                                                                                                                                  |
 | New tests              | `test/src/deployment.test.ts`, additions in `test/src/pat-auth.test.ts`, `test/src/tools/auth.test.ts`, `test/src/tools/search.test.ts`.                                                                                                                            |
 | Inline image uploads   | New `wit_create_work_item_attachment` tool — upload an image as a work item attachment (base64 in) and get back the URL to embed in HTML body fields via `<img src>`.                                                                                               |
+| Container image        | `Dockerfile` + a GHCR publish workflow — every push to `main` ships `ghcr.io/lindsenc-gallagher/azure-devops-mcp`, so the fork is usable without cloning or `npm install`. PAT auth only (no `kerberos` in the image).                                              |
 | WIA auth (spike)       | New experimental `--authentication wia` mode: PAT-free multi-leg SPNEGO/Kerberos auth as the logged-in user via the optional native `kerberos` module. Validated against live on-prem TFS (WebApi tools). See [docs/FORK-ONPREM-WIA.md](./docs/FORK-ONPREM-WIA.md). |
 
 ### Upstream tool consolidation (breaking)
@@ -76,9 +77,29 @@ claude mcp add azure-devops -- npx -y @azure-devops/mcp Contoso
 
 Replace `Contoso` with your org name. On first use, a browser window opens for Microsoft sign-in.
 
-### On-prem Azure DevOps Server with PAT (fork-specific)
+### On-prem Azure DevOps Server with PAT, from the container image (no build needed)
 
-This fork is not published to npm, so you point Claude Code at your local build.
+Every push to `main` publishes an image to GitHub Container Registry, so you can use the fork without cloning it or running `npm install`. All you need is Docker.
+
+```bash
+claude mcp add azure-devops-onprem \
+  --env ADO_PAT=<your-pat> \
+  -- docker run -i --rm -e ADO_PAT \
+     ghcr.io/lindsenc-gallagher/azure-devops-mcp:latest \
+     https://ado.company.local/tfs/DefaultCollection \
+     --authentication pat \
+     -d core work work-items repositories wiki pipelines test-plans
+```
+
+`-i` is required: the MCP protocol runs over stdin/stdout. `--rm` cleans the container up when the client disconnects.
+
+Available tags: `latest` (newest `main`), the package version (e.g. `2.9.0`), and `sha-<commit>` for pinning.
+
+The image is PAT-only. It leaves out the optional native `kerberos` module, so `--authentication wia` is not available there. Windows Integrated Auth needs the caller's own Kerberos ticket, which a container does not have. Use the local Node install below for WIA.
+
+### On-prem Azure DevOps Server with PAT (local build)
+
+You can also point Claude Code at your own build.
 
 1. Build the fork:
    ```bash
@@ -143,7 +164,41 @@ Open **File → Settings → Developer → Edit Config** and edit `claude_deskto
 
 Replace `Contoso` with your org name. Save and fully restart Claude Desktop.
 
-### On-prem Azure DevOps Server with PAT (fork-specific)
+### On-prem Azure DevOps Server with PAT, from the container image
+
+```json
+{
+  "mcpServers": {
+    "azure-devops-onprem": {
+      "command": "docker",
+      "args": [
+        "run",
+        "-i",
+        "--rm",
+        "-e",
+        "ADO_PAT",
+        "ghcr.io/lindsenc-gallagher/azure-devops-mcp:latest",
+        "https://ado.company.local/tfs/DefaultCollection",
+        "--authentication",
+        "pat",
+        "-d",
+        "core",
+        "work",
+        "work-items",
+        "repositories",
+        "wiki",
+        "pipelines",
+        "test-plans"
+      ],
+      "env": {
+        "ADO_PAT": "<your-pat>"
+      }
+    }
+  }
+}
+```
+
+### On-prem Azure DevOps Server with PAT (local build)
 
 ```json
 {
@@ -184,7 +239,13 @@ To use Windows Integrated Auth (no PAT) instead, set `"--authentication"`, `"wia
 
 ## Refreshing After A Fork Update
 
-When this fork ships a new tool or fix, your clients keep running the old compiled `dist/` until you rebuild. The MCP server itself is launched by `node dist/index.js`, not by `npm`, so a `git pull` alone is not enough.
+If you use the container image, pull the new one and restart your MCP client:
+
+```bash
+docker pull ghcr.io/lindsenc-gallagher/azure-devops-mcp:latest
+```
+
+For a local build, your clients keep running the old compiled `dist/` until you rebuild. The MCP server itself is launched by `node dist/index.js`, not by `npm`, so a `git pull` alone is not enough.
 
 ```bash
 git pull
